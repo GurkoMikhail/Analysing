@@ -127,3 +127,15 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Raw files
+/Raw data
+
+# Processed data
+/Processed data
+
+# VS code config
+/.vscode
+
+# Stats
+/Stats
