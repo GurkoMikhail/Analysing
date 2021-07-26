@@ -201,16 +201,14 @@ class DataSeries:
         return timeWithDecay
 
 
-def get_images(phantom_name, angles):
-    nameList = [phantom_name + f' {angle}' +' deg' for angle in angles]
-    nameList = [name + '.hdf' for name in nameList]
+def get_images(nameList):
     data = DataSeries(nameList)
     imageParameters ={
         'decayTime': 300*10**(-9),
-        'spatialResolution': 0.4,
+        'spatialResolution': 0.01,
         'energyResolution': 9.9,
         'energyWindow': [126*10**3, 154*10**3],
-        'pixelSize': 0.5,
+        'pixelSize': 0.01,
         'energyChannels': 512*2,
         'energyRange': [0, 300*10**3],
         'emissionSlice': [0., 100.]
@@ -231,6 +229,20 @@ def save_as_dicom(phantom_name, data, pixel_size=0.5):
 if __name__ == '__main__':
     phantom_name = 'efg3_full_angle'
     angles = np.linspace(-45., 90., 4)
-    images = get_images(phantom_name, angles)
+    angles = [angles[1], ]
+    nameList = [phantom_name + f' {angle}' +' deg' for angle in angles]
+    phantom_name = 'point_source'
+    nameList = ['point_source 10.0 cm', ]
+    
+    collimators_list = [
+        'SiemensSymbiaTSeriesLEHR',
+        'SiemensSymbiaTSeriesLEAP',
+        'SiemensSymbiaTSeriesLEUHR',
+        'SiemensSymbiaTSeriesME',
+        'SiemensSymbiaTSeriesHE'
+        ]
+
+    nameList = [name + '.hdf' for name in nameList]
+    images = get_images(nameList)
     save_as_dicom(phantom_name, images)
 
