@@ -36,6 +36,13 @@ filepathDICOM = f'DICOM phantoms/{phantom_name}'
 
 data = from_dat_to_npy(filepathDAT, size)
 print(np.unique(data))
+data[data == 0.019] = 133   #Мягкие ткани
+data[data == 0.015] = 107   #Лёгкие
+data[data == 0.15] = 1020   #Печень/сердце
+data[data == 0.2] = 1360    #Кишечник
+data[data == 0.24] = 1632   #Кишечник
+data[data == 0.5] = 5000    #Желчный пузырь
+print(np.unique(data))
 np.save(filepathNPY + '.npy', data)
 save_as_dicom(filepathDICOM, data)
 save_as_vtk(filepathVTK, data)
