@@ -205,10 +205,10 @@ def get_images(nameList):
     data = DataSeries(nameList)
     imageParameters ={
         'decayTime': 300*10**(-9),
-        'spatialResolution': 0.01,
+        'spatialResolution': 0.4,
         'energyResolution': 9.9,
         'energyWindow': [126*10**3, 154*10**3],
-        'pixelSize': 0.01,
+        'pixelSize': 0.5,
         'energyChannels': 512*2,
         'energyRange': [0, 300*10**3],
         'emissionSlice': [0., 100.]
@@ -233,8 +233,9 @@ if __name__ == '__main__':
     nameList = [phantom_name + f' {angle}' +' deg' for angle in angles]
     phantom_name = 'point_source'
     nameList = ['point_source 10.0 cm', ]
-    
-    collimators_list = [
+
+    phantom_name = 'collimators'    
+    nameList = [
         'SiemensSymbiaTSeriesLEHR',
         'SiemensSymbiaTSeriesLEAP',
         'SiemensSymbiaTSeriesLEUHR',
