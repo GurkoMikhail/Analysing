@@ -5,16 +5,22 @@ from copy import deepcopy
 from numba import jit
 
 
-class DataSeries:
+class DataExtractor:
 
-    light_speed = 2.99792458*10**10 # cm/s
+    def __init__(self, filePath=None):
+        self.filePath = filePath
 
-    def __init__(self, nameList):
-        self.nameList = nameList
-        self.rngEnergy = np.random.default_rng()
-        self.rngCoordinates = np.random.default_rng()
-        self.fileDataList = {}
-        self._readFiles()
+    def extractData(self, filePath=None):
+        if filePath is not None:
+            self.filePath = filePath
+        if filePath is None:
+            print('Empty file name')
+        fileName = self.filePath.split(sep="/")[-1]
+        print(f'Reading {fileName}')
+        file = File(self.filePath, 'r')
+        data = self._dataExtraction(file)
+        file.close()
+        return data
 
     def _dataExtraction(self, file):
         data = {}
@@ -42,81 +48,16 @@ class DataSeries:
                 interactions_data[key] = interactions_data[key][indicesSort]
         return data
             
-    def convertToImage(self, data, imageParameters):
-        print('converting to image')
-        data = deepcopy(data)
-        interactions_data = data['Interactions data']
-        if imageParameters['imageRange'] is None:
-            imageSize = data['Detector size'][:2]
-            imageRange = np.column_stack([[0, 0], imageSize])
-        else:
-            imageRange = np.asarray(imageParameters['imageRange'])
-        if imageParameters['matrix'] is None:
-            matrix = ((imageRange[:, 1] - imageRange[:, 0])/imageParameters['pixelSize']).astype(int)
-        else:
-            matrix = np.asarray(imageParameters['matrix']).astype(int)
-        self._emissionSlice(interactions_data, imageParameters['emissionSlice'])
-        self._averageActs(interactions_data, imageParameters['decayTime'])
-        self._energyDeviation(interactions_data, imageParameters['energyResolution'])
-        self._energyWindow(interactions_data, imageParameters['energyWindow'])
-        self._coordinatesDeviation(interactions_data, imageParameters['spatialResolution'])
-        coordinates = interactions_data['Coordinates']
-        imageArray = np.histogram2d(coordinates[:, 0], coordinates[:, 1], bins=matrix, range=imageRange)[0]
-        return imageArray
 
-    def acquireEnergySpectrum(self, data, spectumParameters):
-        print('acquiring spectrum')
-        data = deepcopy(data)
-        interactions_data = data['Interactions data']
-        self._emissionSlice(interactions_data, spectumParameters['emissionSlice'])
-        self._averageActs(interactions_data, spectumParameters['decayTime'])
-        self._energyDeviation(interactions_data, spectumParameters['energyResolution'])
-        energySpectrum = np.histogram(interactions_data['Energy transfer'], bins=spectumParameters['energyChannels'], range=spectumParameters['energyRange'])
-        return energySpectrum
+class DataProcessor:
 
-    def energySpectrums(self, parameters={}):
-        spectumParameters = {
-            'decayTime': 300*10**(-9),
-            'energyResolution': 9.9,
-            'energyChannels': 1024,
-            'energyRange': [0, 300*10**3],
-            'emissionSlice': [0., 10.**10]
-        }
-        for key in spectumParameters.keys():
-            if key in parameters:
-                spectumParameters[key] = parameters[key]
-        energySpectrums = []
-        for data in self.fileDataList.values():
-            energySpectrum = self.acquireEnergySpectrum(data, spectumParameters)
-            energySpectrums.append(energySpectrum[0])
-        energySpectrums.append(energySpectrum[1][1:] - (energySpectrum[1][1] - energySpectrum[1][0]))
-        return np.stack(energySpectrums)
+    light_speed = 2.99792458*10**10 # cm/s
 
-    def imagesArray(self, parameters={}):
-        imageParameters ={
-            'decayTime': 300*10**(-9),
-            'spatialResolution': 0.4,
-            'energyResolution': 9.9,
-            'energyWindow': [126*10**3, 154*10**3],
-            'imageRange': None,
-            'pixelSize': 0.5,
-            'matrix': None,
-            'emissionSlice': [0., 10.**10]
-        }
-        for key in imageParameters.keys():
-            if key in parameters:
-                imageParameters[key] = parameters[key]
-        images = []
-        for data in self.fileDataList.values():
-            image = self.convertToImage(data, imageParameters)
-            images.append(image)
-        return np.stack(images)
+    def __init__(self):
+        self.rngEnergy = np.random.default_rng()
+        self.rngCoordinates = np.random.default_rng()
 
-    @property
-    def dataList(self):
-        return self.fileDataList
-
-    def _emissionSlice(self, data, emissionSlice):
+    def addEmissionSlice(self, data, emissionSlice):
         coordinates = data['Coordinates']
         energyTransfer = data['Energy transfer']
         emissionCoordinates = data['Emission coordinates']
@@ -127,7 +68,7 @@ class DataSeries:
         data['Energy transfer'] = energyTransfer[indices]
         data['Emission coordinates'] = emissionCoordinates[indices]
 
-    def _energyWindow(self, data, energyWindow):
+    def addEnergyWindow(self, data, energyWindow):
         coordinates = data['Coordinates']
         emissionTime = data['Emission time']
         energyTransfer = data['Energy transfer']
@@ -138,27 +79,30 @@ class DataSeries:
         data['Energy transfer'] = energyTransfer[indices]
         data['Emission coordinates'] = emissionCoordinates[indices]
 
-    def _energyDeviation(self, data, energyResolution):
+    def addEnergyDeviation(self, data, energyResolution):
         energy = data['Energy transfer']
         coeff = np.sqrt(0.14)*energyResolution/100
         resolutionDistribution = coeff/np.sqrt(energy/10**6)
         sigma = resolutionDistribution*energy/2.355
         energy[:] = self.rngEnergy.normal(energy, sigma)
 
-    def _coordinatesDeviation(self, data, spatialResolution):
+    def addCoordinatesDeviation(self, data, spatialResolution):
         coordinates = data['Coordinates']
         sigma = spatialResolution/2.35
         coordinates[:] = self.rngCoordinates.normal(coordinates, sigma)
 
-    def _averageActs(self, data, decayTime):
+    def averageActs(self, data, decayTime, useDistanceTraveled=False):
         coordinates = data['Coordinates']
         energyTransfer = data['Energy transfer']
         emissionCoordinates = data['Emission coordinates']
         emissionTime = data['Emission time']
         distanceTraveled = data['Distance traveled']
-        registrationTime = emissionTime + distanceTraveled/self.light_speed
-        timeWithDecay = self.withDecayTime(registrationTime, decayTime)
-        unique, indices, counts = np.unique(timeWithDecay, return_index=True, return_counts=True)
+        if useDistanceTraveled:
+            registrationTime = emissionTime + distanceTraveled/self.light_speed
+        else:
+            registrationTime = emissionTime
+        timeWithDecay = self.addDecayTime(registrationTime, decayTime)
+        _, indices, counts = np.unique(timeWithDecay, return_index=True, return_counts=True)
         eventsNumber = indices.size
         eventsIndices = [np.arange(indices[i], indices[i] + counts[i]) for i in range(eventsNumber)]
         averagedCoordinates = np.zeros((eventsNumber, 3), dtype=float)
@@ -181,17 +125,9 @@ class DataSeries:
         data['Energy transfer'] = np.delete(averagedEnergyTransfer, delIndices, axis=0)
         data['Emission coordinates'] = np.delete(averagedEmissionCoordinates, delIndices, axis=0)
 
-    def _readFiles(self):
-        for name in self.nameList:
-            print(f'reading {name}')
-            file = File(f'Raw data/{name}', 'r')
-            data = self._dataExtraction(file)
-            self.fileDataList.update({name: data})
-            file.close()
-
     @staticmethod
     @jit(nopython=True, cache=True)
-    def withDecayTime(time, decayTime):
+    def addDecayTime(time, decayTime):
         timeWithDecay = np.zeros_like(time)
         countdownTime = 0.
         for i, t in enumerate(time):
@@ -199,51 +135,159 @@ class DataSeries:
                 countdownTime = t
             timeWithDecay[i] = countdownTime + decayTime
         return timeWithDecay
+        
+
+class DataConverter:
+
+    def __init__(self):
+        self.dataProcessor = DataProcessor()
+        self.spectumParameters = {
+            'decayTime': 300*10**(-9),
+            'energyResolution': 9.9,
+            'energyChannels': 1024,
+            'energyRange': [0, 300*10**3],
+            'useDistanceTraveled': True,
+            'emissionSlice': [0., 10.**10]
+        }
+        self.imageParameters = {
+            'decayTime': 300*10**(-9),
+            'spatialResolution': 0.4,
+            'energyResolution': 9.9,
+            'energyWindow': [126*10**3, 154*10**3],
+            'imageRange': None,
+            'pixelSize': 0.6,
+            'matrix': None,
+            'useDistanceTraveled': True,
+            'emissionSlice': [0., 10.**10]
+        }
+        self.scattersImageParameters = {
+            'decayTime': 0.,
+            'spatialResolution': 0.,
+            'energyResolution': 0.,
+            'energyWindow': [126*10**3, 154*10**3],
+            'imageRange': None,
+            'pixelSize': 0.6,
+            'matrix': None,
+            'useDistanceTraveled': False,
+            'emissionSlice': [0., 10.**10],
+            'peakEnergy': 140500
+        }
+
+    @staticmethod
+    def updateParameters(parameters, newParameters):
+        for key, value in newParameters.items():
+            if key in parameters:
+                parameters[key] = value
+
+    def _getMatrixAndImageRange(self, data, parameters):
+        if parameters['imageRange'] is None:
+            imageSize = data['Detector size'][:2]
+            imageRange = np.column_stack([[0, 0], imageSize])
+        else:
+            imageRange = np.asarray(parameters['imageRange'])
+        if parameters['matrix'] is None:
+            matrix = ((imageRange[:, 1] - imageRange[:, 0])/parameters['pixelSize']).astype(int)
+        else:
+            matrix = np.asarray(parameters['matrix']).astype(int)
+        return matrix, imageRange
+
+    def acquireEnergySpectrum(self, data, spectumParameters={}):
+        data = deepcopy(data)
+        self.updateParameters(self.spectumParameters, spectumParameters)
+        spectumParameters = self.spectumParameters
+        print('Acquiring spectrum')
+        interactions_data = data['Interactions data']
+        self.dataProcessor.addEmissionSlice(interactions_data, spectumParameters['emissionSlice'])
+        self.dataProcessor.averageActs(interactions_data, spectumParameters['decayTime'], spectumParameters['useDistanceTraveled'])
+        self.dataProcessor.addEnergyDeviation(interactions_data, spectumParameters['energyResolution'])
+        energySpectrum = np.histogram(interactions_data['Energy transfer'], bins=spectumParameters['energyChannels'], range=spectumParameters['energyRange'])
+        return energySpectrum
+
+    def convertToImage(self, data, imageParameters={}):
+        data = deepcopy(data)
+        self.updateParameters(self.imageParameters, imageParameters)
+        imageParameters = self.imageParameters
+        print('Converting to image')
+        interactions_data = data['Interactions data']
+        self.dataProcessor.addEmissionSlice(interactions_data, imageParameters['emissionSlice'])
+        self.dataProcessor.averageActs(interactions_data, imageParameters['decayTime'], imageParameters['useDistanceTraveled'])
+        self.dataProcessor.addEnergyDeviation(interactions_data, imageParameters['energyResolution'])
+        self.dataProcessor.addEnergyWindow(interactions_data, imageParameters['energyWindow'])
+        self.dataProcessor.addCoordinatesDeviation(interactions_data, imageParameters['spatialResolution'])
+        coordinates = interactions_data['Coordinates']
+        matrix, imageRange = self._getMatrixAndImageRange(data, imageParameters)
+        imageArray = np.histogram2d(coordinates[:, 0], coordinates[:, 1], bins=matrix, range=imageRange)[0]
+        return imageArray
+
+    def convertToScattersImage(self, data, scattersImageParameters={}):
+        data = deepcopy(data)
+        self.updateParameters(self.scattersImageParameters, scattersImageParameters)
+        scattersImageParameters = self.scattersImageParameters
+        print('Converting to scatters image')
+        interactions_data = data['Interactions data']
+        matrix, imageRange = self._getMatrixAndImageRange(data, scattersImageParameters)
+        self.dataProcessor.addEmissionSlice(interactions_data, scattersImageParameters['emissionSlice'])
+        self.dataProcessor.averageActs(interactions_data, scattersImageParameters['decayTime'], scattersImageParameters['useDistanceTraveled'])
+        self.dataProcessor.addEnergyWindow(interactions_data, scattersImageParameters['energyWindow'])
+        coordinates = interactions_data['Coordinates']
+        indicesOfPeak = (interactions_data['Energy transfer'] == scattersImageParameters['peakEnergy']).nonzero()[0]
+        peakImageArray = np.histogram2d(coordinates[indicesOfPeak, 0], coordinates[indicesOfPeak, 1], bins=matrix, range=imageRange)[0]
+        generalImageArray = np.histogram2d(coordinates[:, 0], coordinates[:, 1], bins=matrix, range=imageRange)[0]
+        scattersImageArray = np.where(generalImageArray > 0, 1 - peakImageArray/generalImageArray, 1)
+        return scattersImageArray
 
 
-def get_images(nameList):
-    data = DataSeries(nameList)
-    imageParameters ={
-        'decayTime': 300*10**(-9),
-        'spatialResolution': 0.4,
-        'energyResolution': 9.9,
-        'energyWindow': [126*10**3, 154*10**3],
-        'pixelSize': 0.5,
-        'energyChannels': 512*2,
-        'energyRange': [0, 300*10**3],
-        'emissionSlice': [0., 100.]
-    }
-    images = data.imagesArray(imageParameters)
-    images = np.rot90(images, k=1, axes=(1, 2))
-    return images
+class DataSaver:
 
+    def __init__(self, data, fileName, pixelSize=0.6):
+        self.data = np.asarray(data)
+        self.fileName = fileName
+        self.pixelSize = pixelSize
 
-def save_as_dicom(phantom_name, data, pixel_size=0.5):
-    data = (data*255/data.max()).astype(np.ubyte)
-    dicom_image = sitk.GetImageFromArray(data)
-    dicom_image.SetSpacing([pixel_size*10, pixel_size*10, 1])
-    dicom_image.SetMetaData('0010|0010', phantom_name)
-    sitk.WriteImage(dicom_image, f'DICOM data/{phantom_name}.dcm')
+    def saveAsNumpy(self):
+        print('Saving as Numpy')
+        np.save(f'Numpy data/{self.fileName}.npy', self.data)
+
+    def saveAsDicom(self):
+        print('Saving as Dicom')
+        data = self.data.astype(int)
+        image = sitk.GetImageFromArray(data, isVector=False)
+        image.SetOrigin((0., 0., 0.))
+        image.SetSpacing([self.pixelSize*10, self.pixelSize*10, 1])
+        image.SetMetaData('0010|0010', self.fileName)
+        sitk.WriteImage(image, f'DICOM data/{self.fileName}.dcm')
 
 
 if __name__ == '__main__':
-    phantom_name = 'efg3_full_angle'
-    angles = np.linspace(-45., 90., 4)
-    angles = [angles[1], ]
-    nameList = [phantom_name + f' {angle}' +' deg' for angle in angles]
-    phantom_name = 'point_source'
-    nameList = ['point_source 10.0 cm', ]
+    fileName = 'efg3_full_angle'
+    angles = np.linspace(-45., 135., 5)
+    nameList = [f'Raw data/{fileName} {angle} deg' for angle in angles]
 
-    phantom_name = 'collimators'    
-    nameList = [
-        'SiemensSymbiaTSeriesLEHR',
-        'SiemensSymbiaTSeriesLEAP',
-        'SiemensSymbiaTSeriesLEUHR',
-        'SiemensSymbiaTSeriesME',
-        'SiemensSymbiaTSeriesHE'
-        ]
+    # spectrums = get_spectrums(nameList)
+    # np.save(f'Processed data/{fileName} spectrums.npy', spectrums)
+    # exit()
+
+    # fileName = 'point_source'
+    # nameList = ['point_source 10.0 cm', ]
+
+    # fileName = 'collimators'    
+    # nameList = [
+    #     'SiemensSymbiaTSeriesLEHR',
+    #     'SiemensSymbiaTSeriesLEAP',
+    #     'SiemensSymbiaTSeriesLEUHR',
+    #     'SiemensSymbiaTSeriesME',
+    #     'SiemensSymbiaTSeriesHE'
+    #     ]
 
     nameList = [name + '.hdf' for name in nameList]
-    images = get_images(nameList)
-    save_as_dicom(phantom_name, images)
+    images = []
+    for name in nameList:
+        data = DataExtractor(name).extractData()
+        dataConverter = DataConverter()
+        image = dataConverter.convertToImage(data)
+        images.append(image)
+    dataSaver = DataSaver(images, fileName)
+    dataSaver.saveAsDicom()
+
+
 
