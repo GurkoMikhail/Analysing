@@ -134,6 +134,12 @@ dmypy.json
 # Processed data
 /Processed data
 
+# DICOM data
+/DICOM data
+
+# Numpy data
+/Numpy data
+
 # VS code config
 /.vscode
 
