@@ -13,7 +13,7 @@ class DataExtractor:
     def extractData(self, filePath=None):
         if filePath is not None:
             self.filePath = filePath
-        if filePath is None:
+        if self.filePath is None:
             print('Empty file name')
         fileName = self.filePath.split(sep="/")[-1]
         print(f'Reading {fileName}')
@@ -259,7 +259,7 @@ class DataSaver:
 
 
 if __name__ == '__main__':
-    fileName = 'efg3_full_angle'
+    fileName = 'efg3'
     angles = np.linspace(-45., 135., 5)
     nameList = [f'Raw data/{fileName} {angle} deg' for angle in angles]
 
@@ -281,13 +281,26 @@ if __name__ == '__main__':
 
     nameList = [name + '.hdf' for name in nameList]
     images = []
-    for name in nameList:
-        data = DataExtractor(name).extractData()
-        dataConverter = DataConverter()
+    scatterImages = []
+    energySpectrums = []
+    dataExtractor = DataExtractor()
+    dataConverter = DataConverter()
+    for filePath in nameList:
+        dataExtractor.filePath = filePath
+        data = dataExtractor.extractData()
         image = dataConverter.convertToImage(data)
+        scatterImage = dataConverter.convertToScattersImage(data)
+        energySpectrum = dataConverter.acquireEnergySpectrum(data)
         images.append(image)
+        scatterImages.append(scatterImage)
+        energySpectrums.append(energySpectrum)
     dataSaver = DataSaver(images, fileName)
+    dataSaver.saveAsNumpy()
     dataSaver.saveAsDicom()
-
-
+    dataSaver = DataSaver(scatterImages, fileName)
+    dataSaver.saveAsNumpy()
+    dataSaver.saveAsDicom()
+    dataSaver = DataSaver(energySpectrums, fileName)
+    dataSaver.saveAsNumpy()
+    dataSaver.saveAsDicom()
 
