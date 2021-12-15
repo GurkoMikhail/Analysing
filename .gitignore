@@ -140,6 +140,9 @@ dmypy.json
 # Numpy data
 /Numpy data
 
+# Dat data
+/Dat data
+
 # VS code config
 /.vscode
 
