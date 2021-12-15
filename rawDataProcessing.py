@@ -3,21 +3,24 @@ from h5py import File
 import numpy as np
 from copy import deepcopy
 from numba import jit
+from multiprocessing import Pool
 
 
 class DataExtractor:
 
-    def __init__(self, filePath=None):
-        self.filePath = filePath
+    def __init__(self, maxProcesses=32):
+        self.maxProcesses = maxProcesses
 
-    def extractData(self, filePath=None):
-        if filePath is not None:
-            self.filePath = filePath
-        if self.filePath is None:
-            print('Empty file name')
-        fileName = self.filePath.split(sep="/")[-1]
+    def extractData(self, filesPath):
+        if isinstance(filesPath, list):
+            with Pool(self.maxProcesses) as pool:
+                return pool.map(self._extractData, filesPath)
+        return self._extractData(filesPath)
+
+    def _extractData(self, filePath):
+        fileName = filePath.split(sep="/")[-1]
         print(f'Reading {fileName}')
-        file = File(self.filePath, 'r')
+        file = File(filePath, 'r')
         data = self._dataExtraction(file)
         file.close()
         return data
@@ -139,8 +142,8 @@ class DataProcessor:
 
 class DataConverter:
 
-    def __init__(self):
-        self.dataProcessor = DataProcessor()
+    def __init__(self, maxProcesses=32):
+        self.maxProcesses = maxProcesses
         self.spectumParameters = {
             'decayTime': 300*10**(-9),
             'energyResolution': 9.9,
@@ -154,7 +157,7 @@ class DataConverter:
             'spatialResolution': 0.4,
             'energyResolution': 9.9,
             'energyWindow': [126*10**3, 154*10**3],
-            'imageRange': None,
+            'imageRange': [[2.9, 56.2], [2.9, 41.6]],
             'pixelSize': 0.6,
             'matrix': None,
             'useDistanceTraveled': True,
@@ -165,7 +168,7 @@ class DataConverter:
             'spatialResolution': 0.,
             'energyResolution': 0.,
             'energyWindow': [126*10**3, 154*10**3],
-            'imageRange': None,
+            'imageRange': [[0.29, 5.62], [0.29, 4.16]],
             'pixelSize': 0.6,
             'matrix': None,
             'useDistanceTraveled': False,
@@ -192,115 +195,148 @@ class DataConverter:
         return matrix, imageRange
 
     def acquireEnergySpectrum(self, data, spectumParameters={}):
-        data = deepcopy(data)
+        print('\tAcquiring spectrum')
         self.updateParameters(self.spectumParameters, spectumParameters)
-        spectumParameters = self.spectumParameters
-        print('Acquiring spectrum')
-        interactions_data = data['Interactions data']
-        self.dataProcessor.addEmissionSlice(interactions_data, spectumParameters['emissionSlice'])
-        self.dataProcessor.averageActs(interactions_data, spectumParameters['decayTime'], spectumParameters['useDistanceTraveled'])
-        self.dataProcessor.addEnergyDeviation(interactions_data, spectumParameters['energyResolution'])
-        energySpectrum = np.histogram(interactions_data['Energy transfer'], bins=spectumParameters['energyChannels'], range=spectumParameters['energyRange'])
-        return energySpectrum
+        if isinstance(data, list):
+            with Pool(self.maxProcesses) as pool:
+                return pool.map(self._acquireEnergySpectrum, data)
+        return self._acquireEnergySpectrum(data)
 
     def convertToImage(self, data, imageParameters={}):
-        data = deepcopy(data)
+        print('\tConverting to image')
         self.updateParameters(self.imageParameters, imageParameters)
-        imageParameters = self.imageParameters
-        print('Converting to image')
+        if isinstance(data, list):
+            with Pool(self.maxProcesses) as pool:
+                return pool.map(self._convertToImage, data)
+        return self._convertToImage(data)
+
+    def convertToScattersImage(self, data, scattersImageParameters={}):
+        print('\tConverting to scatters image')
+        self.updateParameters(self.scattersImageParameters, scattersImageParameters)
+        if isinstance(data, list):
+            with Pool(self.maxProcesses) as pool:
+                return pool.map(self._convertToScattersImage, data)
+        return self._convertToScattersImage(data)
+
+    def _acquireEnergySpectrum(self, data):
+        dataProcessor = DataProcessor()
+        data = deepcopy(data)
+        spectumParameters = self.spectumParameters
         interactions_data = data['Interactions data']
-        self.dataProcessor.addEmissionSlice(interactions_data, imageParameters['emissionSlice'])
-        self.dataProcessor.averageActs(interactions_data, imageParameters['decayTime'], imageParameters['useDistanceTraveled'])
-        self.dataProcessor.addEnergyDeviation(interactions_data, imageParameters['energyResolution'])
-        self.dataProcessor.addEnergyWindow(interactions_data, imageParameters['energyWindow'])
-        self.dataProcessor.addCoordinatesDeviation(interactions_data, imageParameters['spatialResolution'])
+        dataProcessor.addEmissionSlice(interactions_data, spectumParameters['emissionSlice'])
+        dataProcessor.averageActs(interactions_data, spectumParameters['decayTime'], spectumParameters['useDistanceTraveled'])
+        dataProcessor.addEnergyDeviation(interactions_data, spectumParameters['energyResolution'])
+        energySpectrum = list(np.histogram(interactions_data['Energy transfer'], bins=spectumParameters['energyChannels'], range=spectumParameters['energyRange']))
+        energySpectrum[1] = energySpectrum[1][1:]
+        return energySpectrum
+
+    def _convertToImage(self, data):
+        dataProcessor = DataProcessor()
+        data = deepcopy(data)
+        imageParameters = self.imageParameters
+        interactions_data = data['Interactions data']
+        dataProcessor.addEmissionSlice(interactions_data, imageParameters['emissionSlice'])
+        dataProcessor.averageActs(interactions_data, imageParameters['decayTime'], imageParameters['useDistanceTraveled'])
+        dataProcessor.addEnergyDeviation(interactions_data, imageParameters['energyResolution'])
+        dataProcessor.addEnergyWindow(interactions_data, imageParameters['energyWindow'])
+        dataProcessor.addCoordinatesDeviation(interactions_data, imageParameters['spatialResolution'])
         coordinates = interactions_data['Coordinates']
         matrix, imageRange = self._getMatrixAndImageRange(data, imageParameters)
         imageArray = np.histogram2d(coordinates[:, 0], coordinates[:, 1], bins=matrix, range=imageRange)[0]
         return imageArray
 
-    def convertToScattersImage(self, data, scattersImageParameters={}):
+    def _convertToScattersImage(self, data):
+        dataProcessor = DataProcessor()
         data = deepcopy(data)
-        self.updateParameters(self.scattersImageParameters, scattersImageParameters)
         scattersImageParameters = self.scattersImageParameters
-        print('Converting to scatters image')
         interactions_data = data['Interactions data']
         matrix, imageRange = self._getMatrixAndImageRange(data, scattersImageParameters)
-        self.dataProcessor.addEmissionSlice(interactions_data, scattersImageParameters['emissionSlice'])
-        self.dataProcessor.averageActs(interactions_data, scattersImageParameters['decayTime'], scattersImageParameters['useDistanceTraveled'])
-        self.dataProcessor.addEnergyWindow(interactions_data, scattersImageParameters['energyWindow'])
+        dataProcessor.addEmissionSlice(interactions_data, scattersImageParameters['emissionSlice'])
+        dataProcessor.averageActs(interactions_data, scattersImageParameters['decayTime'], scattersImageParameters['useDistanceTraveled'])
+        dataProcessor.addEnergyWindow(interactions_data, scattersImageParameters['energyWindow'])
         coordinates = interactions_data['Coordinates']
         indicesOfPeak = (interactions_data['Energy transfer'] == scattersImageParameters['peakEnergy']).nonzero()[0]
         peakImageArray = np.histogram2d(coordinates[indicesOfPeak, 0], coordinates[indicesOfPeak, 1], bins=matrix, range=imageRange)[0]
         generalImageArray = np.histogram2d(coordinates[:, 0], coordinates[:, 1], bins=matrix, range=imageRange)[0]
-        scattersImageArray = np.where(generalImageArray > 0, 1 - peakImageArray/generalImageArray, 1)
+        nulls = generalImageArray == 0
+        peakImageArray[nulls] = 1
+        generalImageArray[nulls] = 1
+        scattersImageArray = 1 - peakImageArray/generalImageArray
         return scattersImageArray
 
 
 class DataSaver:
 
-    def __init__(self, data, fileName, pixelSize=0.6):
+    def __init__(self, data, fileName, dataType=None, pixelSize=0.6):
         self.data = np.asarray(data)
-        self.fileName = fileName
+        self._fileName = fileName
+        self.dataType = dataType
         self.pixelSize = pixelSize
 
+    @property
+    def fileName(self):
+        if self.data.ndim > 2:
+            return self._fileName.split('/')[0] + ('' if self.dataType is None else '_' + self.dataType)
+        return self._fileName.split('/')[-1] + ('' if self.dataType is None else '_' + self.dataType)
+
     def saveAsNumpy(self):
-        print('Saving as Numpy')
+        print(f'Saving {self.fileName} as Numpy')
         np.save(f'Numpy data/{self.fileName}.npy', self.data)
 
     def saveAsDicom(self):
-        print('Saving as Dicom')
-        data = self.data.astype(int)
+        print(f'Saving {self.fileName} as Dicom')
+        if self.data.ndim > 2:
+            data = np.rot90(self.data, axes=(1, 2))
+            data = data[:, ::-1]
+        else:
+            data = np.rot90(self.data)
+            data = data[::-1]
+        data = data/self.data.max()*255
+        data = data.astype(np.ubyte)
         image = sitk.GetImageFromArray(data, isVector=False)
         image.SetOrigin((0., 0., 0.))
         image.SetSpacing([self.pixelSize*10, self.pixelSize*10, 1])
         image.SetMetaData('0010|0010', self.fileName)
         sitk.WriteImage(image, f'DICOM data/{self.fileName}.dcm')
 
+    def saveAsDat(self):
+        print(f'Saving {self.fileName} as Dat')
+        data = np.asfortranarray(self.data)
+        if self.data.ndim > 2:
+            from pathlib import Path
+            Path(f'Dat data/{self.fileName}').mkdir(parents=True, exist_ok=True)
+            for i, image in enumerate(data, 1):
+                image = np.rot90(image)
+                np.savetxt(f'Dat data/{self.fileName}/{i}.dat', image)
+        else:
+            data = np.rot90(data)
+            np.savetxt(f'Dat data/{self.fileName}.dat', data)
+
 
 if __name__ == '__main__':
-    fileName = 'efg3'
-    angles = np.linspace(-45., 135., 5)
-    nameList = [f'Raw data/{fileName} {angle} deg' for angle in angles]
-
-    # spectrums = get_spectrums(nameList)
-    # np.save(f'Processed data/{fileName} spectrums.npy', spectrums)
-    # exit()
-
-    # fileName = 'point_source'
-    # nameList = ['point_source 10.0 cm', ]
-
-    # fileName = 'collimators'    
-    # nameList = [
-    #     'SiemensSymbiaTSeriesLEHR',
-    #     'SiemensSymbiaTSeriesLEAP',
-    #     'SiemensSymbiaTSeriesLEUHR',
-    #     'SiemensSymbiaTSeriesME',
-    #     'SiemensSymbiaTSeriesHE'
-    #     ]
-
+    fileName = 'efg3_32'
+    angles = np.linspace(45., -135., 32).round(1)
+    nameList = [f'Raw data/{fileName}/{angle} deg' for angle in angles]
     nameList = [name + '.hdf' for name in nameList]
-    images = []
-    scatterImages = []
-    energySpectrums = []
+
     dataExtractor = DataExtractor()
+    data = dataExtractor.extractData(nameList)
+
     dataConverter = DataConverter()
-    for filePath in nameList:
-        dataExtractor.filePath = filePath
-        data = dataExtractor.extractData()
-        image = dataConverter.convertToImage(data)
-        scatterImage = dataConverter.convertToScattersImage(data)
-        energySpectrum = dataConverter.acquireEnergySpectrum(data)
-        images.append(image)
-        scatterImages.append(scatterImage)
-        energySpectrums.append(energySpectrum)
+
+    images = dataConverter.convertToImage(data)
     dataSaver = DataSaver(images, fileName)
     dataSaver.saveAsNumpy()
     dataSaver.saveAsDicom()
-    dataSaver = DataSaver(scatterImages, fileName)
+    dataSaver.saveAsDat()
+
+    scattersImages = dataConverter.convertToScattersImage(data)
+    dataSaver = DataSaver(scattersImages, fileName, 'scatters')
     dataSaver.saveAsNumpy()
     dataSaver.saveAsDicom()
-    dataSaver = DataSaver(energySpectrums, fileName)
+    dataSaver.saveAsDat()
+
+    energySpectrums = dataConverter.acquireEnergySpectrum(data)
+    dataSaver = DataSaver(energySpectrums, fileName, 'spectrum')
     dataSaver.saveAsNumpy()
-    dataSaver.saveAsDicom()
 
