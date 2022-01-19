@@ -66,8 +66,7 @@ print(np.unique(data))
 # data = data[:, :, 8:108]
 
 
-# data = data[::-1]
-# data = np.rot90(data, k=1, axes=(1, 2))
+# data = np.rot90(data, k=-1, axes=(1, 2))
 # data = np.rot90(data, k=-1, axes=(0, 2))
 
 save_as_npy(filepathNPY, data)
