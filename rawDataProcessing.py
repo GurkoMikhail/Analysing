@@ -231,12 +231,12 @@ class DataConverter:
         energySpectrum[1] = energySpectrum[1][1:]
         return np.array(energySpectrum)
 
-    def _obtainEmissionDistrubution(self, processedData):
+    def _obtainEmissionDistrubution(self, emissionCoordinates):
         processingParameters = self.processingParameters
         emissionRange = np.asarray(processingParameters['emissionROI'])
         bins = np.round((emissionRange[:, 1] - emissionRange[:, 0])/processingParameters['pixelSize']).astype(int)
         emissionDistribution = np.histogramdd(
-            processedData['Emission coordinates'],
+            emissionCoordinates,
             bins=bins,
             range=emissionRange
             )
@@ -254,13 +254,14 @@ class DataConverter:
                 energySpectrum = self._acquireEnergySpectrum(processedData)
                 output.append(energySpectrum)
             if self.processingParameters['returnEmissionDistribution']:
+                emissionCoordinates = processedData['Emission coordinates'][validEvents]
                 DataProcessor.convertToLocalCoordinates(
-                    processedData['Emission coordinates'][validEvents],
+                    emissionCoordinates,
                     data['Origin'],
                     data['R'],
                     data['Rotation center']
                     )
-                emissionDistrubution = self._obtainEmissionDistrubution(processedData)
+                emissionDistrubution = self._obtainEmissionDistrubution(emissionCoordinates)
                 output.append(emissionDistrubution)
             return output
         return imageArray
