@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1853</width>
-    <height>1080</height>
+    <width>1280</width>
+    <height>720</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -30,7 +30,7 @@
         </property>
         <property name="minimumSize">
          <size>
-          <width>1700</width>
+          <width>1000</width>
           <height>0</height>
          </size>
         </property>
@@ -46,7 +46,7 @@
         </property>
         <property name="maximumSize">
          <size>
-          <width>200</width>
+          <width>50</width>
           <height>16777215</height>
          </size>
         </property>
@@ -55,7 +55,7 @@
      </layout>
     </item>
     <item>
-     <widget class="QSlider" name="horizontalSlider_angles">
+     <widget class="QSlider" name="horizontalSlider">
       <property name="enabled">
        <bool>true</bool>
       </property>
@@ -73,6 +73,9 @@
       </property>
       <property name="orientation">
        <enum>Qt::Horizontal</enum>
+      </property>
+      <property name="tickPosition">
+       <enum>QSlider::TicksBelow</enum>
       </property>
      </widget>
     </item>

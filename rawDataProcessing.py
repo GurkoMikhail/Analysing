@@ -45,6 +45,9 @@ class DataExtractor:
                 data['Interactions data'].update({key: np.copy(interactions_data[key])})
             detector = file['Modeling parameters/Subject'].asstr()[()]
             data['Detector size'] = np.copy(file[f'Modeling parameters/Space/{detector}/size'])
+            data['R'] = np.copy(file[f'Modeling parameters/Space/ae3/R'])
+            data['Rotation center'] = np.copy(file[f'Modeling parameters/Space/ae3/rotation_center'])
+            data['Origin'] = np.copy(file[f'Modeling parameters/Space/ae3/coordinates'])
             indicesSort = np.argsort(data['Interactions data']['Emission time'])
             interactions_data = data['Interactions data']
             for key in interactions_data.keys():
@@ -60,24 +63,30 @@ class DataProcessor:
         self.rngEnergy = np.random.default_rng()
         self.rngCoordinates = np.random.default_rng()
 
-    def addEmissionSlice(self, data, emissionSlice):
+    def addEmissionROI(self, data, emissionROI):
         coordinates = data['Coordinates']
         energyTransfer = data['Energy transfer']
+        distanceTraveled = data['Distance traveled']
         emissionCoordinates = data['Emission coordinates']
         emissionTime = data['Emission time']
-        indices = np.nonzero((emissionCoordinates[:, 1] >= emissionSlice[0])*(emissionCoordinates[:, 1] <=emissionSlice[1]))
+        emissionROI = np.asarray(emissionROI)
+        ROI = np.all((emissionCoordinates >= emissionROI[:, 0])*(emissionCoordinates < emissionROI[:, 1]), axis=1)
+        indices = np.nonzero(ROI)[0]
         data['Coordinates'] = coordinates[indices]
+        data['Distance traveled'] = distanceTraveled[indices]
         data['Emission time'] = emissionTime[indices]
         data['Energy transfer'] = energyTransfer[indices]
         data['Emission coordinates'] = emissionCoordinates[indices]
 
     def addEnergyWindow(self, data, energyWindow):
         coordinates = data['Coordinates']
+        distanceTraveled = data['Distance traveled']
         emissionTime = data['Emission time']
         energyTransfer = data['Energy transfer']
         emissionCoordinates = data['Emission coordinates']
         indices = np.nonzero((energyTransfer >= energyWindow[0])*(energyTransfer <= energyWindow[1]))
         data['Coordinates'] = coordinates[indices]
+        data['Distance traveled'] = distanceTraveled[indices]
         data['Emission time'] = emissionTime[indices]
         data['Energy transfer'] = energyTransfer[indices]
         data['Emission coordinates'] = emissionCoordinates[indices]
@@ -109,6 +118,7 @@ class DataProcessor:
         eventsNumber = indices.size
         eventsIndices = [np.arange(indices[i], indices[i] + counts[i]) for i in range(eventsNumber)]
         averagedCoordinates = np.zeros((eventsNumber, 3), dtype=float)
+        averagedDistanceTraveled = np.zeros(eventsNumber, dtype=float)
         averagedEmissionTime = np.zeros(eventsNumber, dtype=float)
         averagedEnergyTransfer = np.zeros(eventsNumber, dtype=float)
         averagedEmissionCoordinates = np.zeros((eventsNumber, 3), dtype=float)
@@ -119,14 +129,25 @@ class DataProcessor:
                 delIndices.append(i)
                 continue
             averagedCoordinates[i] = np.average(coordinates[actsIndices], axis=0, weights=weights)
-            averagedEmissionTime[i] = emissionTime[actsIndices[0]]
+            averagedDistanceTraveled[i] = np.average(distanceTraveled[actsIndices], weights=weights)
+            averagedEmissionTime[i] = np.average(emissionTime[actsIndices], weights=weights)
             averagedEnergyTransfer[i] = np.sum(energyTransfer[actsIndices])
-            averagedEmissionCoordinates[i] = emissionCoordinates[actsIndices[0]]
+            averagedEmissionCoordinates[i] = np.average(emissionCoordinates[actsIndices], axis=0, weights=weights)
         delIndices = np.array(delIndices, dtype=int)
         data['Coordinates'] = np.delete(averagedCoordinates, delIndices, axis=0)
-        data['Emission time'] = np.delete(averagedEmissionTime, delIndices, axis=0)
-        data['Energy transfer'] = np.delete(averagedEnergyTransfer, delIndices, axis=0)
+        data['Distance traveled'] = np.delete(averagedDistanceTraveled, delIndices)
+        data['Emission time'] = np.delete(averagedEmissionTime, delIndices)
+        data['Energy transfer'] = np.delete(averagedEnergyTransfer, delIndices)
         data['Emission coordinates'] = np.delete(averagedEmissionCoordinates, delIndices, axis=0)
+
+    @staticmethod
+    def convertToLocalCoordinates(coordinates, origin, R, rotationCenter):
+        """ Преобразовать в локальные координаты """
+        coordinates -= origin
+        coordinates -= rotationCenter
+        np.matmul(coordinates, R, out=coordinates)
+        coordinates += rotationCenter
+        coordinates += origin
 
     @staticmethod
     @jit(nopython=True, cache=True)
@@ -144,43 +165,33 @@ class DataConverter:
 
     def __init__(self, maxProcesses=32):
         self.maxProcesses = maxProcesses
-        self.spectumParameters = {
-            'decayTime': 300*10**(-9),
-            'energyResolution': 9.9,
-            'energyChannels': 1024,
-            'energyRange': [0, 300*10**3],
-            'useDistanceTraveled': True,
-            'emissionSlice': [0., 10.**10]
-        }
-        self.imageParameters = {
+        self.processingParameters = {
             'decayTime': 300*10**(-9),
             'spatialResolution': 0.4,
             'energyResolution': 9.9,
+            'energyChannels': 1024,
+            'energyRange': [0, 300*10**3],
             'energyWindow': [126*10**3, 154*10**3],
-            'imageRange': [[2.9, 56.2], [2.9, 41.6]],
-            'pixelSize': 0.6,
+            'imageRange': [[0., 51.2], [3.2, 43.2]],
+            'pixelSize': 0.4,
             'matrix': None,
             'useDistanceTraveled': True,
-            'emissionSlice': [0., 10.**10]
+            'returnEnergySpectum': True,
+            'returnEmissionDistribution': True,
+            'emissionROI': [[0., 51.2], [0., 51.2], [3.855, 3.855 + 51.2]]
         }
         self.scattersImageParameters = {
             'decayTime': 0.,
             'spatialResolution': 0.,
             'energyResolution': 0.,
             'energyWindow': [126*10**3, 154*10**3],
-            'imageRange': [[0.29, 5.62], [0.29, 4.16]],
-            'pixelSize': 0.6,
+            'imageRange': [[0., 51.2], [3.2, 43.2]],
+            'pixelSize': 0.4,
             'matrix': None,
             'useDistanceTraveled': False,
-            'emissionSlice': [0., 10.**10],
+            'emissionROI': [[0., 51.2], [0., 51.2], [3.855, 3.855 + 51.2]],
             'peakEnergy': 140500
         }
-
-    @staticmethod
-    def updateParameters(parameters, newParameters):
-        for key, value in newParameters.items():
-            if key in parameters:
-                parameters[key] = value
 
     def _getMatrixAndImageRange(self, data, parameters):
         if parameters['imageRange'] is None:
@@ -189,24 +200,16 @@ class DataConverter:
         else:
             imageRange = np.asarray(parameters['imageRange'])
         if parameters['matrix'] is None:
-            matrix = ((imageRange[:, 1] - imageRange[:, 0])/parameters['pixelSize']).astype(int)
+            matrix = np.round(((imageRange[:, 1] - imageRange[:, 0])/parameters['pixelSize'])).astype(int)
         else:
             matrix = np.asarray(parameters['matrix']).astype(int)
         return matrix, imageRange
 
-    def acquireEnergySpectrum(self, data, spectumParameters={}):
-        print('\tAcquiring spectrum')
-        self.updateParameters(self.spectumParameters, spectumParameters)
-        if isinstance(data, list):
-            with Pool(self.maxProcesses) as pool:
-                return pool.map(self._acquireEnergySpectrum, data)
-        return self._acquireEnergySpectrum(data)
-
-    def convertToImage(self, data, imageParameters={}):
+    def convertToImage(self, data, processingParameters={}):
         print('\tConverting to image')
-        self.updateParameters(self.imageParameters, imageParameters)
+        self.updateParameters(self.processingParameters, processingParameters)
         if isinstance(data, list):
-            with Pool(self.maxProcesses) as pool:
+            with Pool(min(len(data), self.maxProcesses)) as pool:
                 return pool.map(self._convertToImage, data)
         return self._convertToImage(data)
 
@@ -214,55 +217,87 @@ class DataConverter:
         print('\tConverting to scatters image')
         self.updateParameters(self.scattersImageParameters, scattersImageParameters)
         if isinstance(data, list):
-            with Pool(self.maxProcesses) as pool:
+            with Pool(min(len(data), self.maxProcesses)) as pool:
                 return pool.map(self._convertToScattersImage, data)
         return self._convertToScattersImage(data)
 
-    def _acquireEnergySpectrum(self, data):
-        dataProcessor = DataProcessor()
-        data = deepcopy(data)
-        spectumParameters = self.spectumParameters
-        interactions_data = data['Interactions data']
-        dataProcessor.addEmissionSlice(interactions_data, spectumParameters['emissionSlice'])
-        dataProcessor.averageActs(interactions_data, spectumParameters['decayTime'], spectumParameters['useDistanceTraveled'])
-        dataProcessor.addEnergyDeviation(interactions_data, spectumParameters['energyResolution'])
-        energySpectrum = list(np.histogram(interactions_data['Energy transfer'], bins=spectumParameters['energyChannels'], range=spectumParameters['energyRange']))
+    def _acquireEnergySpectrum(self, processedData):
+        processingParameters = self.processingParameters
+        energySpectrum = list(np.histogram(
+            processedData['Energy transfer'],
+            bins=processingParameters['energyChannels'],
+            range=processingParameters['energyRange']
+            ))
         energySpectrum[1] = energySpectrum[1][1:]
-        return energySpectrum
+        return np.array(energySpectrum)
+
+    def _obtainEmissionDistrubution(self, processedData):
+        processingParameters = self.processingParameters
+        emissionRange = np.asarray(processingParameters['emissionROI'])
+        bins = np.round((emissionRange[:, 1] - emissionRange[:, 0])/processingParameters['pixelSize']).astype(int)
+        emissionDistribution = np.histogramdd(
+            processedData['Emission coordinates'],
+            bins=bins,
+            range=emissionRange
+            )
+        return emissionDistribution[0]
 
     def _convertToImage(self, data):
-        dataProcessor = DataProcessor()
-        data = deepcopy(data)
-        imageParameters = self.imageParameters
-        interactions_data = data['Interactions data']
-        dataProcessor.addEmissionSlice(interactions_data, imageParameters['emissionSlice'])
-        dataProcessor.averageActs(interactions_data, imageParameters['decayTime'], imageParameters['useDistanceTraveled'])
-        dataProcessor.addEnergyDeviation(interactions_data, imageParameters['energyResolution'])
-        dataProcessor.addEnergyWindow(interactions_data, imageParameters['energyWindow'])
-        dataProcessor.addCoordinatesDeviation(interactions_data, imageParameters['spatialResolution'])
-        coordinates = interactions_data['Coordinates']
-        matrix, imageRange = self._getMatrixAndImageRange(data, imageParameters)
+        processedData = self.processData(data['Interactions data'], self.processingParameters)
+        matrix, imageRange = self._getMatrixAndImageRange(data, self.processingParameters)
+        validEvents = self.cutToEnergyWindow(processedData['Energy transfer'], self.processingParameters['energyWindow'])
+        coordinates = processedData['Coordinates'][validEvents]
         imageArray = np.histogram2d(coordinates[:, 0], coordinates[:, 1], bins=matrix, range=imageRange)[0]
+        if self.processingParameters['returnEnergySpectum'] or self.processingParameters['returnEmissionDistribution']:
+            output = [imageArray]
+            if self.processingParameters['returnEnergySpectum']:
+                energySpectrum = self._acquireEnergySpectrum(processedData)
+                output.append(energySpectrum)
+            if self.processingParameters['returnEmissionDistribution']:
+                DataProcessor.convertToLocalCoordinates(
+                    processedData['Emission coordinates'],
+                    data['Origin'],
+                    data['R'],
+                    data['Rotation center']
+                    )
+                emissionDistrubution = self._obtainEmissionDistrubution(processedData)
+                output.append(emissionDistrubution)
+            return output
         return imageArray
 
     def _convertToScattersImage(self, data):
-        dataProcessor = DataProcessor()
-        data = deepcopy(data)
-        scattersImageParameters = self.scattersImageParameters
-        interactions_data = data['Interactions data']
-        matrix, imageRange = self._getMatrixAndImageRange(data, scattersImageParameters)
-        dataProcessor.addEmissionSlice(interactions_data, scattersImageParameters['emissionSlice'])
-        dataProcessor.averageActs(interactions_data, scattersImageParameters['decayTime'], scattersImageParameters['useDistanceTraveled'])
-        dataProcessor.addEnergyWindow(interactions_data, scattersImageParameters['energyWindow'])
-        coordinates = interactions_data['Coordinates']
-        indicesOfPeak = (interactions_data['Energy transfer'] == scattersImageParameters['peakEnergy']).nonzero()[0]
+        processedData = self.processData(data['Interactions data'], self.scattersImageParameters)
+        matrix, imageRange = self._getMatrixAndImageRange(data, self.scattersImageParameters)
+        coordinates = processedData['Coordinates']
+        indicesOfPeak = (processedData['Energy transfer'] == self.scattersImageParameters['peakEnergy']).nonzero()[0]
         peakImageArray = np.histogram2d(coordinates[indicesOfPeak, 0], coordinates[indicesOfPeak, 1], bins=matrix, range=imageRange)[0]
-        generalImageArray = np.histogram2d(coordinates[:, 0], coordinates[:, 1], bins=matrix, range=imageRange)[0]
+        validEvents = self.cutToEnergyWindow(processedData['Energy transfer'], self.processingParameters['energyWindow'])
+        generalImageArray = np.histogram2d(coordinates[validEvents, 0], coordinates[validEvents, 1], bins=matrix, range=imageRange)[0]
         nulls = generalImageArray == 0
         peakImageArray[nulls] = 1
         generalImageArray[nulls] = 1
         scattersImageArray = 1 - peakImageArray/generalImageArray
         return scattersImageArray
+
+    @staticmethod
+    def updateParameters(parameters, newParameters):
+        for key, value in newParameters.items():
+            if key in parameters:
+                parameters[key] = value
+
+    @staticmethod
+    def cutToEnergyWindow(energyTransfer, energyWindow):
+        return np.nonzero((energyTransfer >= energyWindow[0])*(energyTransfer <= energyWindow[1]))[0]
+
+    @staticmethod
+    def processData(interactions_data, processingParameters):
+        dataProcessor = DataProcessor()
+        interactions_data = deepcopy(interactions_data)
+        dataProcessor.addEmissionROI(interactions_data, processingParameters['emissionROI'])
+        dataProcessor.averageActs(interactions_data, processingParameters['decayTime'], processingParameters['useDistanceTraveled'])
+        dataProcessor.addEnergyDeviation(interactions_data, processingParameters['energyResolution'])
+        dataProcessor.addCoordinatesDeviation(interactions_data, processingParameters['spatialResolution'])
+        return interactions_data
 
 
 class DataSaver:
@@ -279,17 +314,23 @@ class DataSaver:
             return self._fileName.split('/')[0] + ('' if self.dataType is None else '_' + self.dataType)
         return self._fileName.split('/')[-1] + ('' if self.dataType is None else '_' + self.dataType)
 
-    def saveAsNumpy(self):
+    def saveAsNumpy(self, rot=False):
         print(f'Saving {self.fileName} as Numpy')
-        np.save(f'Numpy data/{self.fileName}.npy', self.data)
+        data = self.data
+        if rot:
+            if self.data.ndim > 2:
+                data = np.rot90(self.data, k=-1, axes=(1, 2))
+            else:
+                data = np.rot90(self.data, k=-1)
+        np.save(f'Numpy data/{self.fileName}.npy', data)
 
     def saveAsDicom(self):
         print(f'Saving {self.fileName} as Dicom')
         if self.data.ndim > 2:
-            data = np.rot90(self.data, axes=(1, 2))
+            data = np.rot90(self.data, k=-1, axes=(1, 2))
             data = data[:, ::-1]
         else:
-            data = np.rot90(self.data)
+            data = np.rot90(self.data, k=-1)
             data = data[::-1]
         data = data/self.data.max()*255
         data = data.astype(np.ubyte)
@@ -301,21 +342,22 @@ class DataSaver:
 
     def saveAsDat(self):
         print(f'Saving {self.fileName} as Dat')
-        data = np.asfortranarray(self.data)
+        data = self.data
         if self.data.ndim > 2:
             from pathlib import Path
             Path(f'Dat data/{self.fileName}').mkdir(parents=True, exist_ok=True)
             for i, image in enumerate(data, 1):
-                image = np.rot90(image)
-                np.savetxt(f'Dat data/{self.fileName}/{i}.dat', image)
+                image = image[::-1]
+                np.savetxt(f'Dat data/{self.fileName}/{i}.dat', image, fmt='%i', delimiter='\t')
         else:
-            data = np.rot90(data)
-            np.savetxt(f'Dat data/{self.fileName}.dat', data)
+            data = data[::-1]
+            np.savetxt(f'Dat data/{self.fileName}.dat', data, fmt='%i', delimiter='\t')
 
 
 if __name__ == '__main__':
     fileName = 'efg3_32'
-    angles = np.linspace(45., -135., 32).round(1)
+    angles = np.linspace(-np.pi/4, 3*np.pi/4, 32)
+    angles = np.round(np.rad2deg(angles), 1)
     nameList = [f'Raw data/{fileName}/{angle} deg' for angle in angles]
     nameList = [name + '.hdf' for name in nameList]
 
@@ -324,19 +366,25 @@ if __name__ == '__main__':
 
     dataConverter = DataConverter()
 
-    images = dataConverter.convertToImage(data)
+    output = dataConverter.convertToImage(data)
+    images = [image for image, spectrum, distribution in output]
+    energySpectrums = [spectrum for image, spectrum, distribution in output]
+    distributions = np.asarray([distribution for image, spectrum, distribution in output])
+
     dataSaver = DataSaver(images, fileName)
-    dataSaver.saveAsNumpy()
+    dataSaver.saveAsNumpy(rot=True)
     dataSaver.saveAsDicom()
     dataSaver.saveAsDat()
+    
+    dataSaver = DataSaver(energySpectrums, fileName, 'spectrums')
+    dataSaver.saveAsNumpy()
+
+    dataSaver = DataSaver(distributions, fileName, 'distributions')
+    dataSaver.saveAsNumpy()
 
     scattersImages = dataConverter.convertToScattersImage(data)
     dataSaver = DataSaver(scattersImages, fileName, 'scatters')
     dataSaver.saveAsNumpy()
     dataSaver.saveAsDicom()
     dataSaver.saveAsDat()
-
-    energySpectrums = dataConverter.acquireEnergySpectrum(data)
-    dataSaver = DataSaver(energySpectrums, fileName, 'spectrum')
-    dataSaver.saveAsNumpy()
 

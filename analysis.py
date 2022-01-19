@@ -1,153 +1,165 @@
-# from subjects import Detector
+import pyqtgraph as pg
+from pyqtgraph.Qt import QtCore, QtGui
 import numpy as np
-import h5py
+from scipy.ndimage import gaussian_filter, median_filter
+
+pg.setConfigOption('background', 'w')
+pg.setConfigOption('foreground', 'k')
+
+# Interpret image data as row-major instead of col-major
+# pg.setConfigOptions(imageAxisOrder='row-major')
+
+pg.mkQApp()
+win = pg.GraphicsLayoutWidget()
+win.setWindowTitle('Image Analysis')
+
+# A plot area (ViewBox + axes) for displaying the image
+p1 = win.addPlot(title="")
+p1.setLabel('left', text='Z', units='pixel')
+p1.setLabel('bottom', text='Y', units='pixel')
+p1.setAspectLocked()
+
+# Item for displaying image data
+img = pg.ImageItem()
+p1.addItem(img)
+
+# Custom ROI for selecting an image region
+roi = pg.ROI([0, 0], scaleSnap=True, translateSnap=True)
+roi.addScaleHandle([0.5, 1], [0.5, 0.5])
+roi.addScaleHandle([0, 0.5], [0.5, 0.5])
+# p1.addItem(roi)
+roi.setZValue(10)  # make sure ROI is drawn above image
+
+# Isocurve drawing
+iso = pg.IsocurveItem(level=20, pen='g')
+# iso.setParentItem(img)
+iso.setZValue(5)
+
+# Contrast/color control
+hist = pg.HistogramLUTItem()
+hist.setImageItem(img)
+hist.setMaximumWidth(100)
+win.addItem(hist)
+
+# Draggable line for setting isocurve level
+isoLine = pg.InfiniteLine(angle=0, movable=True, pen='g')
+hist.vb.addItem(isoLine)
+hist.vb.setMouseEnabled(y=False) # makes user interaction a little easier
+isoLine.setValue(20)
+isoLine.setZValue(1000) # bring iso line above contrast controls
+
+# Another plot area for displaying ROI data
+win.nextRow()
+p2 = win.addPlot(colspan=1)
+# p2.setLabel('left', text='Fraction of scattered', units='%')
+p2.setLabel('left', text='Counts')
+p2.setLabel('bottom', text='Z', units='pixel')
+p2.showGrid(x=True, y=True, alpha=0.7)
+p2.setMaximumHeight(250)
+win.resize(1000, 1000)
+win.show()
 
 
-def modeling_parameters(file_name):
-    print('Start parameters')
-    file_in = h5py.File(f'Raw data/{file_name}', 'a')
-    file_out = h5py.File(f'Processed data/{file_name}', 'a')
-    file_in['Modeling parameters'].copy(file_in['Modeling parameters'], file_out)
-    file_in.close()
-    file_out.close()
-    print('Finish parameters')
+# Load image data
+phantom_name = 'ae3'
+n = 23
+# phantom_name = 'efg3_LA_liver'
+# phantom_name = phantom_name + '_scatters'
+# phantom_name = phantom_name + '_140500eV'
 
-def inside_subject(file_name, subject):
-    print('Start inside')
-    coordinates = []
-    energy_transfer = []
-    emission_time = []
-    emission_coordinates = []
-    file_in = h5py.File(f'Raw data/{file_name}', 'a')
-    for flow in file_in['Flows'].values():
-        _coordinates = np.copy(flow['Coordinates'])
-        _energy_transfer = np.copy(flow['Energy transfer'])
-        _emission_time = np.copy(flow['Emission time'])
-        _emission_coordinates = np.copy(flow['Emission coordinates'])
-        indices = subject.inside(_coordinates)
-        coordinates.append(_coordinates[indices])
-        energy_transfer.append(_energy_transfer[indices])
-        emission_time.append(_emission_time[indices])
-        emission_coordinates.append(_emission_coordinates[indices])
-    coordinates = np.concatenate(coordinates)
-    energy_transfer = np.concatenate(energy_transfer)
-    emission_time = np.concatenate(emission_time)
-    emission_coordinates = np.concatenate(emission_coordinates)
-    file_in.close()
-    file_out = h5py.File(f'Processed data/{file_name}', 'a')
-    in_subject = file_out.create_group(f'Inside_{subject.__class__.__name__}')
-    in_subject.create_dataset('Coordinates', data=coordinates)
-    in_subject.create_dataset('Energy transfer', data=energy_transfer)
-    in_subject.create_dataset('Emission time', data=emission_time)
-    in_subject.create_dataset('Subject size', data=subject.size)
-    in_subject.create_dataset('Emission coordinates', data=emission_coordinates)
-    file_out.close()
-    print('Finish inside')
+# data = np.load('Numpy data/efg3_32.npy')
+# data = np.loadtxt('Dat phantoms/ae3.dat').reshape((128, 128, 128), order='F')
+
+# data3d = np.load(f'Numpy data/{phantom_name}.npy')
+# data = data3d.sum(axis=0)
+# data = np.rot90(data, k=-1, axes=(0, 2))
+# image = data.sum(axis=0)
+
+data = np.loadtxt(f'Dat phantoms/{phantom_name}.dat').reshape((128, 128, 128), order='F')
+# lung = np.where(data == 0.04, data, 0)
+# data
+# image = data[:, :, 48]
 
 
-def dose_distribution(file_name, space_size, voxel_size):
-    print('Start dose')
-    volume = np.zeros((space_size/voxel_size).astype(np.uint))
-    file_in = h5py.File(f'Raw data/{file_name}', 'a')
-    for flow in file_in['Flows'].values():
-        coordinates = flow['Coordinates']
-        energy_transfer = flow['Energy transfer']
-        flow_volume = np.histogramdd(
-            sample=coordinates,
-            bins=(space_size/voxel_size).astype(np.int),
-            range=((0, space_size[0]), (0, space_size[1]), (0, space_size[2])),
-            weights=energy_transfer
-        )[0]
-        volume += flow_volume
-    file_in.close()
-    file_out = h5py.File(f'Processed data/{file_name}', 'a')
-    group = file_out.create_group('Dose distribution')
-    group.create_dataset('Volume', data=volume)
-    group.create_dataset('Voxel size', data=voxel_size)
-    file_out.close()
-    print('Finish dose')
+image = data.sum(axis=0)
 
 
-def emission_distribution(file_name, space_size, voxel_size):
-    print('Start emission')
-    volume = np.zeros((space_size/voxel_size).astype(np.uint))
-    file_in = h5py.File(f'Raw data/{file_name}', 'a')
-    for flow in file_in['Flows'].values():
-        emission_time = np.asarray(flow['Emission time'])
-        unique, indices = np.unique(emission_time, return_index=True)
-        coordinates = np.asarray(flow['Emission coordinates'])[indices]
-        energy_transfer = np.asarray(flow['Energy transfer'])[indices]
-        flow_volume = np.histogramdd(
-            sample=coordinates,
-            bins=(space_size/voxel_size).astype(np.int),
-            range=((0, space_size[0]), (0, space_size[1]), (0, space_size[2])),
-            weights=energy_transfer
-        )[0]
-        volume += flow_volume
-    file_in.close()
-    file_out = h5py.File(f'Processed data/{file_name}', 'a')
-    group = file_out.create_group('Emission distribution')
-    group.create_dataset('Volume', data=volume)
-    group.create_dataset('Voxel size', data=voxel_size)
-    file_out.close()
-    print('Finish emission')
+# p1.setTitle(phantom_name)
+# data = np.load(f'Numpy data/{phantom_name}.npy')
+# image = data[n]
+# image = np.loadtxt(f'Dat data/{phantom_name}/{n}.dat')
+# data *= 100
+# print(f'Total {image.sum()}')
+# print(f'Mean {image[image > 0].mean()}')
+sigma = 0
+image = gaussian_filter(image, sigma)
+pixelSize = 0.5*10**(-2)
+print(image.sum())
+img.setImage(image)
+roi.setPos(0, (image.shape[0] - 1)//2 - 2)
+roi.setSize((image.shape[1], 4))
+roi.maxBounds = img.boundingRect()
+# hist.setLevels(data.min(), data.max())
+
+# build isocurves from smoothed data
+iso.setData(gaussian_filter(image, 0 if sigma != 0 else 1))
+
+# set position and scale of image
+# img.scale(0.2, 0.2)
+# img.translate(-50, 0)
+
+# zoom to fit imageo
+# p1.autoRange()  
 
 
-def source_distribution(file_name, voxel_size):
-    print('Start source')
-    file_in = h5py.File(f'Raw data/{file_name}', 'a')
-    volume = np.copy(file_in['Source distribution'])
-    file_in.close()
-    file_out = h5py.File(f'Processed data/{file_name}', 'a')
-    group = file_out.create_group('Source distribution')
-    group.create_dataset('Volume', data=volume)
-    group.create_dataset('Voxel size', data=voxel_size)
-    file_out.close()
-    print('Finish source')
+# Callbacks for handling user interaction
+total = image.sum()
+mean = image[image > 0].mean()
+def updatePlot():
+    global img, roi, image, p2, data
+    y = data.sum(axis=(0, 1))
+    x = np.arange(y.size) + 1
+    p2.plot(x=x, y=y, clear=True).setPen('b')
+    # selected = roi.getArrayRegion(image, img)
+    # # print(f'ROI mean {selected[selected > 0].mean()}')
+    # p2.plot(selected.mean(axis=0), clear=True).setPen('b')
+    # roi_mean = selected[selected > 0].mean()
+    # p2.setTitle('Total = %i, mean = %0.1f, ROI mean = %0.1f' %(total, mean, roi_mean))
 
-def concatenate_flows(file_name):
-    coordinates = []
-    energy_transfer = []
-    emission_time = []
-    emission_coordinates = []
-    file = h5py.File(f'Raw data/{file_name}', 'a')
-    subject_name = 'Detector'
-    subject_size = np.copy(file[f'Modeling parameters/Space/{subject_name}/size'])
-    for flow in file['Flows'].values():
-        coordinates.append(np.copy(flow['Coordinates']))
-        energy_transfer.append(np.copy(flow['Energy transfer']))
-        emission_time.append(np.copy(flow['Emission time']))
-        emission_coordinates.append(np.copy(flow['Emission coordinates']))
-    coordinates = np.concatenate(coordinates)
-    energy_transfer = np.concatenate(energy_transfer)
-    emission_time = np.concatenate(emission_time)
-    emission_coordinates = np.concatenate(emission_coordinates)
-    in_subject = file.create_group(f'Inside {subject_name}')
-    in_subject.create_dataset('Coordinates', data=coordinates)
-    in_subject.create_dataset('Energy transfer', data=energy_transfer)
-    in_subject.create_dataset('Emission time', data=emission_time)
-    in_subject.create_dataset('Subject size', data=subject_size)
-    in_subject.create_dataset('Emission coordinates', data=emission_coordinates)
-    # del file['Flows']
-    file.close()
+roi.sigRegionChanged.connect(updatePlot)
+updatePlot()
 
+def updateIsocurve():
+    global isoLine, iso
+    iso.setLevel(isoLine.value())
+
+isoLine.sigDragged.connect(updateIsocurve)
+
+def imageHoverEvent(event):
+    """Show the position, pixel, and value under the mouse cursor.
+    """
+    total = image.sum()
+    mean = image[image > 0].mean()
+    if event.isExit():
+        p1.setLabel('top', "Total: %i, Mean: %d" % (total, mean))
+        return
+    pos = event.pos()
+    i, j = pos.y(), pos.x()
+    i = int(np.clip(i, 0, image.shape[0] - 1))
+    j = int(np.clip(j, 0, image.shape[1] - 1))
+    val = image[i, j]
+    ppos = img.mapToParent(pos)
+    x, y = ppos.x(), ppos.y()
+    p1.setLabel('top', "pos: (%0.1f, %0.1f)  pixel: (%d, %d)  value: %g Total: %i, Mean: %d" % (x, y, i, j, val, total, mean))
+
+# Monkey-patch the image to use our custom hover function. 
+# This is generally discouraged (you should subclass ImageItem instead),
+# but it works for a very simple use like this. 
+# img.hoverEvent = imageHoverEvent
+
+
+## Start Qt event loop unless running in interactive mode or using pyside.
 if __name__ == '__main__':
-    file_name = 'efg3_fix 0.0 deg.hdf'
-    space_size = np.asarray((53.3, 70., 38.7))
-    voxel_size = 0.4
-    # subject = Detector(
-    #     coordinates=(0., 9.5, 0.),
-    #     size=(53.3, 38.7, 9.5),
-    #     material=4,
-    #     euler_angles=(0, np.pi/2, 0),
-    #     rotation_center=(0., 0., 0.)
-    #     )
-    
-    concatenate_flows(file_name)
-
-    # modeling_parameters(file_name)
-    # source_distribution(file_name, voxel_size)
-    # dose_distribution(file_name, space_size, voxel_size)
-    # emission_distribution(file_name, space_size, voxel_size)
-    # inside_subject(file_name, subject)
-
+    import sys
+    if (sys.flags.interactive != 1) or not hasattr(QtCore, 'PYQT_VERSION'):
+        QtGui.QApplication.instance().exec_()
