@@ -255,7 +255,7 @@ class DataConverter:
                 output.append(energySpectrum)
             if self.processingParameters['returnEmissionDistribution']:
                 DataProcessor.convertToLocalCoordinates(
-                    processedData['Emission coordinates'],
+                    processedData['Emission coordinates'][validEvents],
                     data['Origin'],
                     data['R'],
                     data['Rotation center']
