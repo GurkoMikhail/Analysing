@@ -1,4 +1,5 @@
 import SimpleITK as sitk
+from hepunits import*
 from h5py import File
 import numpy as np
 from copy import deepcopy
@@ -45,9 +46,9 @@ class DataExtractor:
                 data['Interactions data'].update({key: np.copy(interactions_data[key])})
             detector = file['Modeling parameters/Subject'].asstr()[()]
             data['Detector size'] = np.copy(file[f'Modeling parameters/Space/{detector}/size'])
-            data['R'] = np.copy(file[f'Modeling parameters/Space/ae3/R'])
-            data['Rotation center'] = np.copy(file[f'Modeling parameters/Space/ae3/rotation_center'])
-            data['Origin'] = np.copy(file[f'Modeling parameters/Space/ae3/coordinates'])
+            data['R'] = np.copy(file[f'Modeling parameters/Source/R'])
+            data['Rotation center'] = np.copy(file[f'Modeling parameters/Source/rotation_center'])
+            data['Origin'] = np.copy(file[f'Modeling parameters/Source/coordinates'])
             indicesSort = np.argsort(data['Interactions data']['Emission time'])
             interactions_data = data['Interactions data']
             for key in interactions_data.keys():
@@ -57,11 +58,8 @@ class DataExtractor:
 
 class DataProcessor:
 
-    light_speed = 2.99792458*10**10 # cm/s
-
     def __init__(self):
-        self.rngEnergy = np.random.default_rng()
-        self.rngCoordinates = np.random.default_rng()
+        self.rng = np.random.default_rng()
 
     def addEmissionROI(self, data, emissionROI):
         coordinates = data['Coordinates']
@@ -91,17 +89,17 @@ class DataProcessor:
         data['Energy transfer'] = energyTransfer[indices]
         data['Emission coordinates'] = emissionCoordinates[indices]
 
-    def addEnergyDeviation(self, data, energyResolution):
+    def addEnergyDeviation(self, data, energyResolution, referenceEnergy):
         energy = data['Energy transfer']
-        coeff = np.sqrt(0.14)*energyResolution/100
-        resolutionDistribution = coeff/np.sqrt(energy/10**6)
+        coeff = np.sqrt(referenceEnergy)*energyResolution/100
+        resolutionDistribution = coeff/np.sqrt(energy)
         sigma = resolutionDistribution*energy/2.355
-        energy[:] = self.rngEnergy.normal(energy, sigma)
+        energy[:] = self.rng.normal(energy, sigma)
 
     def addCoordinatesDeviation(self, data, spatialResolution):
         coordinates = data['Coordinates']
         sigma = spatialResolution/2.35
-        coordinates[:] = self.rngCoordinates.normal(coordinates, sigma)
+        coordinates[:] = self.rng.normal(coordinates, sigma)
 
     def averageActs(self, data, decayTime, useDistanceTraveled=False):
         coordinates = data['Coordinates']
@@ -110,7 +108,7 @@ class DataProcessor:
         emissionTime = data['Emission time']
         distanceTraveled = data['Distance traveled']
         if useDistanceTraveled:
-            registrationTime = emissionTime + distanceTraveled/self.light_speed
+            registrationTime = emissionTime + distanceTraveled/c_light
         else:
             registrationTime = emissionTime
         timeWithDecay = self.addDecayTime(registrationTime, decayTime)
@@ -125,14 +123,14 @@ class DataProcessor:
         delIndices = []
         for i, actsIndices in enumerate(eventsIndices):
             weights = energyTransfer[actsIndices]
-            if weights.sum() == 0.:
+            if weights.sum() > 0:
+                averagedCoordinates[i] = np.average(coordinates[actsIndices], axis=0, weights=weights)
+                averagedDistanceTraveled[i] = np.average(distanceTraveled[actsIndices], weights=weights)
+                averagedEmissionTime[i] = np.average(emissionTime[actsIndices], weights=weights)
+                averagedEnergyTransfer[i] = np.sum(energyTransfer[actsIndices])
+                averagedEmissionCoordinates[i] = np.average(emissionCoordinates[actsIndices], axis=0, weights=weights)
+            else:
                 delIndices.append(i)
-                continue
-            averagedCoordinates[i] = np.average(coordinates[actsIndices], axis=0, weights=weights)
-            averagedDistanceTraveled[i] = np.average(distanceTraveled[actsIndices], weights=weights)
-            averagedEmissionTime[i] = np.average(emissionTime[actsIndices], weights=weights)
-            averagedEnergyTransfer[i] = np.sum(energyTransfer[actsIndices])
-            averagedEmissionCoordinates[i] = np.average(emissionCoordinates[actsIndices], axis=0, weights=weights)
         delIndices = np.array(delIndices, dtype=int)
         data['Coordinates'] = np.delete(averagedCoordinates, delIndices, axis=0)
         data['Distance traveled'] = np.delete(averagedDistanceTraveled, delIndices)
@@ -166,31 +164,33 @@ class DataConverter:
     def __init__(self, maxProcesses=32):
         self.maxProcesses = maxProcesses
         self.processingParameters = {
-            'decayTime': 300*10**(-9),
-            'spatialResolution': 0.4,
+            'decayTime': 300*ns,
+            'spatialResolution': 4.*mm,
             'energyResolution': 9.9,
+            'referenceEnergy': 140.5*keV,
             'energyChannels': 1024,
-            'energyRange': [0, 300*10**3],
-            'energyWindow': [126*10**3, 154*10**3],
-            'imageRange': [[0., 51.2], [0., 51.2]],
-            'pixelSize': 0.4,
+            'energyRange': [0, 300*keV],
+            'energyWindow': [126*keV, 154*keV],
+            'imageRange': [[0., 51.2*cm], [0., 40.*cm]],
+            'pixelSize': 4.*mm,
             'matrix': None,
             'useDistanceTraveled': True,
             'returnEnergySpectum': True,
             'returnEmissionDistribution': True,
-            'emissionROI': [[0., 51.2], [0., 51.2], [3.855, 3.855 + 51.2]]
+            'emissionROI': [[0., 51.2*cm], [0., 40.*cm], [3.855*cm, 3.855*cm + 51.2*cm]]
         }
         self.scattersImageParameters = {
             'decayTime': 0.,
             'spatialResolution': 0.,
             'energyResolution': 0.,
-            'energyWindow': [126*10**3, 154*10**3],
-            'imageRange': [[0., 51.2], [0., 51.2]],
-            'pixelSize': 0.4,
+            'referenceEnergy': 140.5*keV,
+            'energyWindow': [126*keV, 154*keV],
+            'imageRange': [[0., 51.2*cm], [0., 40.*cm]],
+            'pixelSize': 4.*mm,
             'matrix': None,
             'useDistanceTraveled': False,
-            'emissionROI': [[0., 51.2], [0., 51.2], [3.855, 3.855 + 51.2]],
-            'peakEnergy': 140500
+            'emissionROI': [[0., 51.2*cm], [0., 40.*cm], [3.855*cm, 3.855*cm + 51.2*cm]],
+            'peakEnergy': 140.5*keV
         }
 
     def _getMatrixAndImageRange(self, data, parameters):
@@ -296,7 +296,7 @@ class DataConverter:
         interactions_data = deepcopy(interactions_data)
         dataProcessor.addEmissionROI(interactions_data, processingParameters['emissionROI'])
         dataProcessor.averageActs(interactions_data, processingParameters['decayTime'], processingParameters['useDistanceTraveled'])
-        dataProcessor.addEnergyDeviation(interactions_data, processingParameters['energyResolution'])
+        dataProcessor.addEnergyDeviation(interactions_data, processingParameters['energyResolution'], processingParameters['referenceEnergy'])
         dataProcessor.addCoordinatesDeviation(interactions_data, processingParameters['spatialResolution'])
         return interactions_data
 
@@ -356,7 +356,7 @@ class DataSaver:
 
 
 if __name__ == '__main__':
-    fileName = 'efg3_32'
+    fileName = 'efg3cutWA'
     angles = np.linspace(-np.pi/4, 3*np.pi/4, 32)
     angles = np.round(np.rad2deg(angles), 1)
     nameList = [f'Raw data/{fileName}/{angle} deg' for angle in angles]
